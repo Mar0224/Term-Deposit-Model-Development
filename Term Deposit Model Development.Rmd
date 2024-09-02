@@ -1,0 +1,794 @@
+---
+title: "Term Deposit Model Development"
+author: "Wilmar Mangapot"
+date: "2024-05-03"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Project Details
+This project demonstrates on the classification model using different machine learning techniques in R. The dataset used in this project contains information about a bank's marketing campaigns, and is commonly used for binary classification tasks to predict whether a customer will subscribe to a term deposit.
+
+# Data
+
+The Bank Marketing dataset is available from the UCI Machine Learning Repository, which is a public repository for machine learning datasets. You can access the dataset and its information from the following link:
+
+<https://archive.ics.uci.edu/dataset/222/bank+marketing>
+
+
+*Input variables:*
+
+1.  age (numeric)
+
+2.  job : type of job (categorical: "admin.","unknown","unemployed","management","housemaid","entrepreneur",
+"student", "blue-collar","self-employed","retired","technician","services")
+
+3.  marital : marital status (categorical: "married","divorced","single"; note: "divorced" means divorced or widowed)
+
+4.  education (categorical: "unknown","secondary","primary","tertiary")
+
+5.  default: has credit in default? (binary: "yes","no")
+
+6.  balance: average yearly balance, in euros (numeric)
+
+7.  housing: has housing loan? (binary: "yes","no")
+
+8.  loan: has personal loan? (binary: "yes","no") \# related with the last contact of the current campaign:
+
+9.  contact: contact communication type (categorical: "unknown","telephone","cellular")
+
+10. day: last contact day of the month (numeric)
+
+11. month: last contact month of year (categorical: "jan", "feb", "mar", ..., "nov", "dec")
+
+12. duration: last contact duration, in seconds (numeric) \# other attributes:
+
+13. campaign: number of contacts performed during this campaign and for this client (numeric, includes last contact)
+
+14. pdays: number of days that passed by after the client was last contacted from a previous campaign (numeric, -1 means client was not previously contacted)
+
+15. previous: number of contacts performed before this campaign and for this client (numeric)
+
+16. poutcome: outcome of the previous marketing campaign (categorical: "unknown","other","failure","success")
+
+    *Output variable (desired target):*
+
+17. y - has the client subscribed a term deposit? (binary: "yes","no")
+
+## Libraries
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(easypackages)
+libraries("readr","tidyverse","ggplot2","dplyr","rpart","caret","class",
+          "KernSmooth","ROSE","rpart.plot","randomForest","MASS","pROC",
+          "car")
+```
+
+## Dataset
+```{r echo=TRUE, message=FALSE}
+bank_df <- read_delim("C:/Users/wpman/Desktop/GROWSARI/bank-full.csv", 
+                      delim = ";", escape_double = FALSE, trim_ws = TRUE)
+```
+
+# EXPLANATORY DATA ANALYSIS
+```{r}
+# Making a copy of the data set for Explanatory Data Analysis
+bank <- bank_df 
+
+# Checking the dimensions of the dataset
+dim(bank) 
+
+# Checking the contents of the dataset
+head(bank) 
+```
+The dataset has 45,211 records with 17 columns. 
+
+
+```{r}
+str(bank) # To check the data types of each variables in the dataset
+```
+
+In R, converting categorical variables to factors is very important because it enables R to recognize the variable as a categorical variable, rather than a numerical variable. This is important because categorical variables have unique properties that require special treatment when performing statistical analyses or machine learning algorithms.
+
+## Categorical Variables
+```{r}
+# List of columns to convert to factors
+cat_vars <- c("job", "marital", "education", "default", "housing", "loan", 
+              "contact", "month", "poutcome","y")
+
+convert_to_factors <- function(data, columns) {
+  for (column in columns) {
+    data[[column]] <- as.factor(data[[column]])
+  }
+  return(data)
+}
+
+# Convert specified columns to factors
+bank <- convert_to_factors(bank, cat_vars)
+
+# Find the categorical variables
+cat_vars <- sapply(bank, is.factor)
+
+# Find the unique values of each categorical variable
+unique_vals <- lapply(bank[, cat_vars], unique)
+print(unique_vals)
+```
+
+```{r}
+cat_vars <- c("job", "marital", "education", "default", "housing", "loan", 
+              "contact", "month", "poutcome")
+
+# Create a function to plot bar charts for categorical variables
+plot_cat_var <- function(data, var_name) {
+  
+  # Prepare data for plotting
+  freq_table <- data %>%
+    group_by(.data[[var_name]], y) %>%
+    summarise(freq = n(), .groups = 'drop') %>%
+    mutate(percentage = (freq / sum(freq)) * 100)
+
+  # Create plot
+  p <- ggplot(freq_table, aes(x = reorder(.data[[var_name]], -freq), y = percentage, fill = y)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_manual(values = c("#FF9999", "#66CC66")) +
+    labs(title = paste("Distribution of", var_name), x = var_name, y = "Percentage")
+
+  # Return the plot object
+  return(p)
+}
+
+# Plot bar charts for all categorical variables using a loop
+for (var in cat_vars) {
+  print(plot_cat_var(bank, var))  # Explicitly print each plot
+}
+```
+
+Here we are the few other observations made.
+
+**Job**: Maximum number of clients work in Blue-color job.
+
+**Maritial**: Maximum number of clients are married. Minimum number of clients are divorced.
+
+**Education**: Maximum number of clients have completed Secondary education.
+
+**Default**: Almost all clients in the dataset have no credit default.
+
+**Loan**: Maximum number of clients do not have a housing.
+
+**Loan**: Maximum number of clients do not have a personal loan.
+
+**Contact**: Maximum number of clients has been contacted through cellular.
+
+**Month**: Most number of contacts were carried out in the month of May. Least number of contacts were carried out in the month of December.
+
+**Poutcome**: For maximum number of clients outcome of previous marketing campaign is unknown. Number of failures are higher when compared to success in the results of previous marketing campaign.
+
+
+## Numerical Variables
+```{r}
+# Display summary statistics for numeric variables
+num_vars <- c("age", "balance", "day", "duration", "campaign", "pdays", "previous")
+summary(bank[,num_vars])
+```
+From the above statistical summary, the minimum age in the dataset is 18 years old while the maximum age is 95 years old. Lets see the distribution of it using box plot.
+
+```{r}
+# Check for the outliers in the numerical variables in the dataset
+# Create a box plot of age
+ggplot(data = bank, aes(x = "", y = age)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(aes(color = "age"), width = 0.2) +
+  labs(x = "", y = "Value") +
+  ggtitle("Box plot of age with outliers") +
+  theme_bw()
+```
+
+Age has outliers.
+
+```{r}
+#Create a box plot of balance with outliers
+ggplot(data = bank, aes(x = "", y = balance)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(aes(color = "balance"), width = 0.2) +
+  labs(x = "", y = "Value") +
+  scale_color_manual(values = c("red", "blue")) +
+  ggtitle("Box plot of balance with outliers") +
+  theme_bw()
+```
+
+
+```{r}
+# Create bins for different balance levels
+bins <- c(-Inf, 0, 200, 1300, Inf)
+labels <- c("Negative balance", "Low balance", "Middle balance", "High balance")
+
+# Group the balance values into the bins and add labels
+bank_group <- bank
+bank_group$balance_group <- cut(bank$balance, breaks = bins, labels = labels)
+
+# Create a bar graph of balance by balance_group
+ggplot(bank_group, aes(x = balance_group)) + 
+  geom_bar() + 
+  ggtitle("Distribution of Balance") +
+  xlab("Balance Group") +
+  ylab("Count")
+
+```
+From the above summary statistics of balance data, its distribution of bins and box plot, we can infer that the balance variable has outliers. The negative balance here is assumed to be allowed for term deposits and hence not removed. More than 7000 customers hold negative balance and more than 12000 customers hold high balance greater than 1500 euros, and rest hold average balance between 500 t0 1500 euros.
+
+Lets see the distribution of all other numeric variables.
+
+```{r}
+# select numeric columns
+bank_numeric <- bank %>% 
+  select_if(is.numeric)
+
+# gather data into long format for plotting
+bank_gathered <- bank_numeric %>% 
+  gather()
+
+# plot the distribution of numeric variables
+ggplot(bank_gathered, aes(x=value)) + 
+  geom_histogram(bins=30) +
+  facet_wrap(~key, scales="free")
+```
+
+```{r}
+# Check for missing values
+sum(is.na(bank))
+```
+
+Fortunately, there are no missing values. If there were missing values we will have to decide whether to remove them or do imputation technique.
+
+Before we proceed to the model development, we need to check the distribution of our dependent variable "y"
+```{r}
+# Check for class imbalance
+ggplot(bank, aes(x = y, fill = y)) +
+  geom_bar() +
+  ggtitle("Distribution of Target Variable") +
+  xlab("Target Variable") +
+  ylab("Count")
+```
+
+According ot the box plot, the dataset is highly imbalance in terms of the dependent variable. Understanding the distribution of the target variable can help guide the development of machine learning models. In particular, it can help determine the appropriate evaluation metrics to use (e.g. accuracy, precision, recall, F1-score) and the techniques that can be used to handle class imbalance (e.g. resampling methods, cost-sensitive learning, ensemble methods).
+
+# MODEL DEVELOPMENT
+
+## Classification using Decision Tree
+
+### Training and Test data set
+```{r}
+# Split the data into training and testing sets
+set.seed(123)
+trainIndex <- createDataPartition(bank$y, p = 0.7, list = FALSE)
+training <- bank[trainIndex, ]
+testing <- bank[-trainIndex, ]
+```
+
+```{r}
+tree_model <- rpart(y ~ ., data = training, method = "class") # Training the model
+rpart.plot(tree_model) # Plotting the model
+tree_model
+```
+
+After training the model, we plot the decision tree using the plot function. This produces a graphical representation of the tree that can help us interpret the model.
+
+### Model Prediction
+```{r}
+# Make predictions on the testing set
+predictions <- predict(tree_model, newdata = testing, type = "class")
+```
+
+```{r}
+# Evaluate the model
+conf_matrix <- confusionMatrix(predictions, testing$y)
+
+# Print the confusion matrix and the overall accuracy
+print(conf_matrix)
+cat("Overall Accuracy:", round(conf_matrix$overall[1], 3), "\n")
+```
+
+```{r}
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass[1]
+recall <- conf_matrix$byClass[2]
+f1_score <- conf_matrix$byClass[3]
+cat("Precision:", round(precision, 3), "\n")
+cat("Recall:", round(recall, 3), "\n")
+cat("F1 Score:", round(f1_score, 3), "\n")
+```
+```{r}
+predictions <- predict(tree_model, newdata = testing, type = "prob")[,2]
+
+# Calculate AUC for Decision Tree
+tree_auc <- roc(testing$y, predictions)
+print(paste("AUC for Decision Tree:", round(auc(tree_auc),3)))
+```
+
+
+## Classification using Decision Tree with SMOTE
+
+### Training and Test data set
+```{r}
+# Split the data into training and testing sets
+set.seed(123)
+trainIndex <- createDataPartition(bank$y, p = 0.7, list = FALSE)
+training <- bank[trainIndex, ]
+testing <- bank[-trainIndex, ]
+```
+
+To preserve the accuracy of the testing data set, we will only apply SMOTE to the training data set
+
+```{r}
+training_balance <- ovun.sample(y ~ ., data = training, method = "over", N = 48000)$data
+prop.table(table(training_balance$y))
+```
+After using SMOTE, the distribution of the dependent variable are now became stable. Now, we will build the model again.
+
+```{r}
+tree_model <- rpart(y ~ ., data = training_balance, method = "class") # Training the model
+rpart.plot(tree_model) # Plotting the model
+tree_model
+```
+### Model Prediction
+```{r}
+# Make predictions on the testing set
+predictions <- predict(tree_model, newdata = testing, type = "class")
+```
+
+```{r}
+# Evaluate the model
+conf_matrix <- confusionMatrix(predictions, testing$y)
+
+# Print the confusion matrix and the overall accuracy
+print(conf_matrix)
+cat("Overall Accuracy:", round(conf_matrix$overall[1], 3), "\n")
+```
+
+```{r}
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass[1]
+recall <- conf_matrix$byClass[2]
+f1_score <- conf_matrix$byClass[3]
+cat("Precision:", round(precision, 3), "\n")
+cat("Recall:", round(recall, 3), "\n")
+cat("F1 Score:", round(f1_score, 3), "\n")
+```
+
+```{r}
+predictions <- predict(tree_model, newdata = testing, type = "prob")[,2]
+
+# Calculate AUC for Decision Tree
+tree_auc <- roc(testing$y, predictions)
+print(paste("AUC for Decision Tree:", round(auc(tree_auc),3)))
+```
+
+## Classification using Random Forest
+### Training and Test data set
+```{r}
+# Split the data into training and testing sets
+set.seed(123)
+trainIndex <- createDataPartition(bank$y, p = 0.7, list = FALSE)
+training <- bank[trainIndex, ]
+testing <- bank[-trainIndex, ]
+```
+
+```{r}
+# Training the model
+random_forest <- randomForest(y ~ .,data = training, ntree = 500)
+random_forest
+plot(random_forest) # Plotting the model
+```
+
+After training the model, we plot the random forest using the plot function. This produces a graphical representation of the forest that can help us interpret the model.
+
+```{r}
+# Variable importance plot
+varImpPlot(random_forest)
+```
+Based on the Variance important plot, duration, month and balance has the highest importance in the model while contact, loan and default has the least importance.
+
+### Model Prediction
+```{r}
+# Make predictions on the testing set
+predictions <- predict(random_forest, newdata = testing, type = "class")
+```
+
+```{r}
+# Evaluate the model
+conf_matrix <- confusionMatrix(predictions, testing$y)
+
+# Print the confusion matrix and the overall accuracy
+print(conf_matrix)
+cat("Overall Accuracy:", round(conf_matrix$overall[1], 3), "\n")
+```
+
+```{r}
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass[1]
+recall <- conf_matrix$byClass[2]
+f1_score <- conf_matrix$byClass[3]
+cat("Precision:", round(precision, 3), "\n")
+cat("Recall:", round(recall, 3), "\n")
+cat("F1 Score:", round(f1_score, 3), "\n")
+```
+
+```{r}
+predictions <- predict(random_forest, newdata = testing, type = "prob")[,2]
+
+# Calculate AUC for Random Forest
+forest_auc <- roc(testing$y, predictions)
+print(paste("AUC for Random Forest:", round(auc(forest_auc),3)))
+```
+
+
+
+## Classification using Random Forest with SMOTE
+
+### Training and Test data set
+```{r}
+# Split the data into training and testing sets
+set.seed(123)
+trainIndex <- createDataPartition(bank$y, p = 0.7, list = FALSE)
+training <- bank[trainIndex, ]
+testing <- bank[-trainIndex, ]
+```
+
+To preserve the accuracy of the testing data set, we will only apply SMOTE to the training data set
+
+```{r}
+training_balance <- ovun.sample(y ~ ., data = training, method = "over", N = 48000)$data
+prop.table(table(training_balance$y))
+```
+After using SMOTE, the distribution of the dependent variable are now became stable. Now, we will build the model again.
+
+```{r}
+random_forest <- randomForest(y ~ .,data = training_balance, ntree = 500)
+random_forest
+plot(random_forest) # Plotting the model
+```
+
+```{r}
+# Variable importance plot
+varImpPlot(random_forest)
+```
+
+Based on the Variance important plot, duration, month and balance has the highest importance in the model while marital, loan and default has the least importance. 
+
+### Model Prediction
+```{r}
+# Make predictions on the testing set
+predictions <- predict(random_forest, newdata = testing, type = "class")
+```
+
+```{r}
+# Evaluate the model
+conf_matrix <- confusionMatrix(predictions, testing$y)
+
+# Print the confusion matrix and the overall accuracy
+print(conf_matrix)
+cat("Overall Accuracy:", round(conf_matrix$overall[1], 3), "\n")
+```
+
+```{r}
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass[1]
+recall <- conf_matrix$byClass[2]
+f1_score <- conf_matrix$byClass[3]
+cat("Precision:", round(precision, 3), "\n")
+cat("Recall:", round(recall, 3), "\n")
+cat("F1 Score:", round(f1_score, 3), "\n")
+```
+
+```{r}
+predictions <- predict(random_forest, newdata = testing, type = "prob")[,2]
+
+# Calculate AUC for Random Forest
+forest_auc <- roc(testing$y, predictions)
+print(paste("AUC for Random Forest:", round(auc(forest_auc),3)))
+```
+
+
+## Classification using Logistic Regression
+### Training and Test data set
+```{r}
+# Split the data into training and testing sets
+set.seed(123)
+trainIndex <- createDataPartition(bank$y, p = 0.7, list = FALSE)
+training <- bank[trainIndex, ]
+testing <- bank[-trainIndex, ]
+```
+
+```{r}
+# Training the model
+logistic <- glm(y ~ ., data = training, family = "binomial") # Using backward stepwise regression
+summary(logistic)
+```
+
+```{r}
+# Checking of Variance Inflation Factor (VIF) for Multicollinearity
+vif_values <- vif(logistic)
+print(vif_values)
+```
+
+Based on the initial result above, all VIF are within the acceptable level. However, there are some factors that is not significant with the model. Thus, we will be using the step wise backward regression technique to determine the best model for logistic regression.
+
+```{r}
+# Using stepwise backward regression technique
+logistic_model <- stepAIC(logistic, direction = "backward", trace = FALSE)
+summary(logistic_model)
+```
+The best model determine by Stepwise Backward Regression consist of factors such as job, marital status, education, balance, housing, loan, contact, day, month, duration, campaign and poutcome
+
+
+### Model Prediction
+```{r}
+# Make predictions on the testing set
+predictions <- predict(logistic_model, newdata = testing, type = "response")
+```
+
+```{r}
+# Predicting in the test dataset
+pred_prob <- predict(logistic_model, testing, type = "response")
+
+# Converting from probability to actual output
+testing$pred_class <- ifelse(pred_prob >= 0.5, "yes", "no")
+testing$pred_class <- as.factor(testing$pred_class)
+# Generating the classification table
+
+conf_matrix <- confusionMatrix(testing$pred_class, testing$y)
+
+# Print the confusion matrix and the overall accuracy
+print(conf_matrix)
+cat("Overall Accuracy:", round(conf_matrix$overall[1], 3), "\n")
+
+```
+
+```{r}
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass[1]
+recall <- conf_matrix$byClass[2]
+f1_score <- conf_matrix$byClass[3]
+cat("Precision:", round(precision, 3), "\n")
+cat("Recall:", round(recall, 3), "\n")
+cat("F1 Score:", round(f1_score, 3), "\n")
+```
+
+```{r}
+# Calculate AUC for Logistic Regression
+logistic_auc <- roc(testing$y, predictions)
+logistic_auc_value <- auc(logistic_auc)
+print(paste("AUC for Logistic Regression:", round(logistic_auc_value,3)))
+```
+## Classification using Logistic Regression with SMOTE
+### Training and Test data set
+```{r}
+# Split the data into training and testing sets
+set.seed(123)
+trainIndex <- createDataPartition(bank$y, p = 0.7, list = FALSE)
+training <- bank[trainIndex, ]
+testing <- bank[-trainIndex, ]
+```
+
+To preserve the accuracy of the testing data set, we will only apply SMOTE to the training data set
+
+```{r}
+training_balance <- ovun.sample(y ~ ., data = training, method = "over", N = 48000)$data
+prop.table(table(training_balance$y))
+```
+After using SMOTE, the distribution of the dependent variable are now became stable. Now, we will build the model again.
+
+```{r}
+# Training the model
+logistic <- glm(y ~ ., data = training_balance, family = "binomial") # Using backward stepwise regression
+summary(logistic)
+```
+
+```{r}
+# Checking of Variance Inflation Factor (VIF) for Multicollinearity
+vif_values <- vif(logistic)
+print(vif_values)
+```
+
+Based on the initial result above, all VIF are within the acceptable level. However, there are some factors that is not significant with the model. Thus, we will be using the step wise backward regression technique to determine the best model for logistic regression.
+
+```{r}
+# Using stepwise backward regression technique
+logistic_model <- stepAIC(logistic, direction = "backward", trace = FALSE)
+summary(logistic_model)
+```
+The best model determine by Stepwise Backward Regression consist of factors such as job, marital status, education, balance, housing, loan, contact, day, month, duration, campaign and poutcome
+
+
+### Model Prediction
+```{r}
+# Make predictions on the testing set
+predictions <- predict(logistic_model, newdata = testing, type = "response")
+```
+
+```{r}
+# Predicting in the test dataset
+pred_prob <- predict(logistic_model, testing, type = "response")
+
+# Converting from probability to actual output
+testing$pred_class <- ifelse(pred_prob >= 0.5, "yes", "no")
+testing$pred_class <- as.factor(testing$pred_class)
+# Generating the classification table
+
+conf_matrix <- confusionMatrix(testing$pred_class, testing$y)
+
+# Print the confusion matrix and the overall accuracy
+print(conf_matrix)
+cat("Overall Accuracy:", round(conf_matrix$overall[1], 3), "\n")
+
+```
+
+```{r}
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass[1]
+recall <- conf_matrix$byClass[2]
+f1_score <- conf_matrix$byClass[3]
+cat("Precision:", round(precision, 3), "\n")
+cat("Recall:", round(recall, 3), "\n")
+cat("F1 Score:", round(f1_score, 3), "\n")
+```
+
+```{r}
+# Calculate AUC for Logistic Regression
+logistic_auc <- roc(testing$y, predictions)
+logistic_auc_value <- auc(logistic_auc)
+print(paste("AUC for Logistic Regression:", round(logistic_auc_value,3)))
+```
+
+# SUMMARY
+```{r}
+summary<- matrix(NA, nrow = 6, ncol = 5)
+# Set column names
+colnames(summary) <- c("Accuracy", "Precision", "Recall", "F1 Score", "AUC")
+
+# Set row names
+rownames(summary) <- c("Decision Tree", "Decision Tree with SMOTE", 
+                       "Random Forest", "Random Forest with SMOTE", 
+                       "Logistic Regression","Logistic Regression with SMOTE")
+
+# For Decision Tree
+summary[1,1] <- 0.902
+summary[1,2] <- 0.966
+summary[1,3] <- 0.414
+summary[1,4] <- 0.926
+summary[1,5] <- 0.803
+
+# For Decision Tree with Smote
+summary[2,1] <- 0.865
+summary[2,2] <- 0.878
+summary[2,3] <- 0.767
+summary[2,4] <- 0.966
+summary[2,5] <- 0.861
+
+# For Random Forest
+summary[3,1] <- 0.911
+summary[3,2] <- 0.967
+summary[3,3] <- 0.491
+summary[3,4] <- 0.935
+summary[3,5] <- 0.935
+
+# For Random Forest with Smote
+summary[4,1] <- 0.911
+summary[4,2] <- 0.949
+summary[4,3] <- 0.625
+summary[4,4] <- 0.950
+summary[4,5] <- 0.936
+
+# For Logistic Regression
+summary[5,1] <- 0.903
+summary[5,2] <- 0.977
+summary[5,3] <- 0.349
+summary[5,4] <- 0.919
+summary[5,5] <- 0.909
+
+# For Logistic Regression with Smote
+summary[6,1] <- 0.870
+summary[6,2] <- 0.885
+summary[6,3] <- 0.760
+summary[6,4] <- 0.965
+summary[6,5] <- 0.912
+
+summary
+
+```
+Based on the summarized table of all the performances of the different models, Random Forest, Random Forest with SMOTE and Logistic Regression are the top 3 models with highest accuracy. Thus, we will be choosing the best model among the three. While Random Forest with SMOTE has higher accuracy, ovarsampling method sometimes leads to better performance. Since we are interested in targeting customers most likely to avail the term deposit, using the original data set will lead to more acceptable and reliable results. Thus, we will remove that to out options and now have two options: Random Forest and Logistic Regresion. Since both of them have accuracy greater than 90%, this impliease that these two models has excellent classification.
+
+## Analysis of Metrics
+**Precision vs. Recall**: Precision measures the accuracy of positive predictions, while recall (sensitivity) measures the ability to find all positive instances. Logistic Regression shows a higher precision but significantly lower recall than Random Forest. This suggests that while Logistic Regression is more accurate when it predicts a positive class, it fails to capture a substantial number of actual positives compared to Random Forest.
+
+**F1 Score**: The F1 Score is the harmonic mean of precision and recall. It is particularly useful when you need a balance between precision and recall. Random Forest has a higher F1 Score indicating a better balance between precision and recall compared to Logistic Regression.
+
+## Considerations for Model Selection
+### Model Complexity and Interpretability:
+1. Random Forest is a more complex model as it builds multiple trees and aggregates their results. This complexity can lead to better performance but at the cost of interpretability.
+
+2. Logistic Regression is inherently simpler and more interpretable. The coefficients of the model can be directly interpreted in terms of odds ratios, making it easier to explain to stakeholders.
+Computational Efficiency:
+
+3. Random Forest can be computationally intensive, particularly with a large number of trees and deep tree structures. It requires more memory and processing power, especially during training.
+
+4. Logistic Regression is generally faster to train and requires less computational resources, making it suitable for environments with limited computational capacity.
+
+# Conclusion and Recommendation
+Given that **Logistic Regression** demonstrates the highest precision among the evaluated models, it becomes the preferable choice when the priority is minimizing costs associated with incorrect predictions. This model ensures that marketing efforts are directed only towards those most likely to avail the term deposit, thereby optimizing resource allocation and reducing waste. High precision is crucial in scenarios where the cost of targeting non-customers (false positives) outweighs the potential loss from not identifying every possible customer. This approach not only conserves budget but also enhances the effectiveness of marketing campaigns by focusing on high-probability leads.
+
+## Justification
+**1. Precision and Cost Minimization**
+Logistic Regression has demonstrated the highest precision among the models evaluated. This implies that it has the highest likelihood of correctly identifying only those customers who are most likely to avail the term deposit. In scenarios where marketing resources are limited or costly, maximizing precision helps in reducing wasteful expenditure by targeting only the most promising leads.
+
+**2. Interpretability and Stakeholder Communication**
+One of the strongest points in favor of Logistic Regression is its interpretability. The model coefficients can be easily translated into odds ratios, providing clear insights into how each predictor influences the probability of a customer availing the term deposit. This makes it easier to communicate the model's decision-making process to non-technical stakeholders, facilitating better business decisions.
+
+**3. Model Simplicity and Deployment**
+Logistic Regression is not only easier to implement but also generally faster and less resource-intensive compared to more complex models like Random Forest. This simplicity can be advantageous when deploying the model in production environments where resources are a constraint or where real-time decision-making is required.
+
+# Final Model for reporting
+
+```{r}
+summary(logistic_model)
+```
+Key Insights:
+
+1. Age: The negative coefficient for age (-0.003548) suggests that as clients get older, the likelihood of subscribing decreases slightly. Given the p-value (<0.05), this effect is statistically significant.
+
+2. Job: Different job categories have different impacts. For instance, retirees (jobretired) have a positive coefficient (0.3241), indicating they are more likely to subscribe compared to the baseline job category. Conversely, blue-collar workers (jobblue-collar) have a negative impact, being less likely to subscribe.
+
+3. Marital Status: Being single (maritalsingle) positively impacts the subscription likelihood compared to being divorced (the baseline), whereas being married (maritalmarried) slightly decreases the likelihood.
+
+4. Education: Higher education levels (secondary, tertiary) increase the likelihood of subscription. This indicates that clients with more education are more inclined to subscribe to term deposits.
+
+5. Housing and Loan: Having a housing loan (housingyes) or a personal loan (loanyes) significantly decreases the likelihood of subscribing, possibly due to financial constraints.
+
+6. Contact: Clients who were contacted via unknown methods (contactunknown) have a significantly lower likelihood of subscribing, possibly indicating the effectiveness of more personalized contact methods.
+
+7. Month of Contact: Months like March (monthmar), October (monthoct), and December (monthdec) show a higher likelihood of subscription. These could be strategic months for campaigns.
+
+8. Duration of Last Contact: A very strong predictor with duration having a high positive coefficient (0.005452), meaning longer calls significantly increase the probability of a client subscribing.
+
+9. Campaign and Previous Contacts: More contacts in the current campaign (campaign) decrease the likelihood, possibly due to contact fatigue. However, more contacts from previous campaigns (previous) slightly increase the likelihood, suggesting that repeated contact over time may build trust or recognition.
+
+10. Outcome of Previous Marketing Campaign: The success of previous marketing (poutcomesuccess) dramatically increases the likelihood of a subscription, highlighting the impact of positive past experiences.
+
+# Recommendations for Strategic Focus
+
+1. Target younger clients and those in specific job categories like retirees and students for marketing term deposits.
+
+2. Tailor the contact strategy to use more direct and personal methods rather than unknown methods.
+
+3. Focus marketing efforts during months with historically higher success rates.
+
+4. Consider lengthening the duration of contact calls as it has a strong positive impact on subscription likelihood.
+
+5. Re-evaluate and potentially reduce the number of contacts per campaign to avoid contact fatigue while maintaining or increasing contacts from previous campaigns to reinforce recognition.
+
+# Next Steps with Logistic Regression
+
+**1. Model Optimization**
+Before final deployment, consider tuning the model to enhance its performance further:
+
+  a. Feature Engineering: Refine existing features or create new ones that could help improve model accuracy.
+  b. Threshold Adjustment: Adjust the classification threshold to balance precision and recall according to business needs.
+  c. Cross-Validation: Use cross-validation to ensure the model’s robustness and avoid overfitting.
+
+**2. Model Validation**
+It’s essential to validate the model with a fresh dataset or through techniques like cross-validation to ensure its performance holds up with new, unseen data. This will help confirm the model's generalizability and reliability.
+
+**3. Deployment and Monitoring**
+Deploy the model into a production environment where it can start scoring actual customers:
+  a. Integration: Integrate the model with existing customer databases and marketing systems.
+  b.Monitoring: Regularly monitor the model's performance and make adjustments as needed based on feedback and changing data patterns.
+
+**4. Stakeholder Reporting**
+Prepare reports and presentations for stakeholders detailing the model’s predictive performance, the insights gained from model coefficients, and the expected impact on marketing strategies.
+
+
+
+
+
+
+
